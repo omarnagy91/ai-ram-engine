@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from supabase_py import create_client
+from supabase import create_client
 
 load_dotenv(".env.local", override=True)
 
