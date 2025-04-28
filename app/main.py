@@ -39,19 +39,17 @@ async def embed_and_save(body: dict):
     part = body["part"]
     chapter = body["chapter"]
 
+    # 1️⃣  get embedding from OpenAI
     emb_resp = openai.embeddings.create(
         model=os.environ["OPENAI_MODEL_EMBED"],
         input=text,
     )
-    vector = emb_resp.data[0].embedding
-
+    vector = emb_resp.data[0].embedding            # list[float]
+    # 2️⃣  convert list → pgvector string
+    vect_str = "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
+    # 3️⃣  insert
     res = sb.table("messages").insert({
-        "text": text,
-        "part": part,
-        "chapter": chapter,
-        "embedding": vector
+        "text": text,"part": part,"chapter": chapter,"embedding": vect_str                      # ← string now
     }).execute()
     if not (200 <= res.status_code < 300):
         raise HTTPException(500, str(res.data))
-
-    return {"inserted": True, "id": res.data[0]["id"]}
