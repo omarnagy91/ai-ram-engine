@@ -24,6 +24,15 @@ app.add_middleware(
 async def health():
     return {"ok": True}
 
+@app.get("/debug/env")
+async def debug_env():
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if service_key:
+        service_key = service_key[:20]
+    else:
+        service_key = "MISSING"
+    return {"service_key": service_key}
+
 @app.post("/save")
 async def save(payload: SavePayload):
     """Insert already-computed embedding row."""
