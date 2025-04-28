@@ -1,13 +1,11 @@
-import os
-import openai
+import os, openai
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-
 from .db import sb
 from .schemas import SavePayload
 
-# ─────────── ENV + OpenAI
+# ─────────── ENV / OpenAI
 load_dotenv(".env.local", override=True)
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
@@ -22,28 +20,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─────────── helpers
+def _extract_id(res) -> str | None:
+    """
+    supabase-py 2.x returns a Postgrest Response that *no longer*
+    exposes .status_code / .error.  
+    Instead we trust that .execute() raised no exception, then pull
+    the row id from whatever structure came back.
+    """
+    if hasattr(res, "data") and res.data:
+        row = res.data[0]
+    elif isinstance(res, list) and res:
+        row = res[0]
+    else:
+        return None
+    return row.get("id") if isinstance(row, dict) else None
+
 # ─────────── Routes
 @app.get("/health")
 async def health():
     return {"ok": True}
 
-
 @app.get("/debug/env")
 async def debug_env():
-    svc = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "MISSING")[:20]
-    return {"service_key": svc}
-
+    sk = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    return {"service_key": sk[:20] or "MISSING"}
 
 @app.post("/save")
 async def save(payload: SavePayload):
-    """Insert already-computed embedding row."""
     res = sb.table("messages").insert(payload.dict()).execute()
-
-    if res.status_code >= 400 or res.data is None:
-        raise HTTPException(500, str(res.data))
-
-    return {"inserted": True, "id": res.data[0]["id"]}
-
+    row_id = _extract_id(res)
+    if row_id is None:
+        raise HTTPException(500, "Insert failed (no id returned)")
+    return {"inserted": True, "id": row_id}
 
 @app.post("/embed-save")
 async def embed_and_save(body: dict):
@@ -51,29 +60,28 @@ async def embed_and_save(body: dict):
     part    = body["part"]
     chapter = body["chapter"]
 
-    # 1️⃣  Create embedding
-    emb_resp = openai.embeddings.create(
+    # 1️⃣  OpenAI embedding
+    emb = openai.embeddings.create(
         model=os.environ["OPENAI_MODEL_EMBED"],
         input=text,
-    )
-    vector   = emb_resp.data[0].embedding        # list[float]
+    ).data[0].embedding          # list[float]
 
-    # 2️⃣  pgvector literal → "[0.123, …]"
-    vect_str = "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
+    # 2️⃣  list → pgvector literal
+    vect_str = "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
 
-    # 3️⃣  Insert row
+    # 3️⃣  insert into Supabase
     res = (
         sb.table("messages")
-          .insert({
-              "text": text,
-              "part": part,
-              "chapter": chapter,
-              "embedding": vect_str,
-          })
-          .execute()
+        .insert({
+            "text": text,
+            "part": part,
+            "chapter": chapter,
+            "embedding": vect_str,
+        })
+        .execute()
     )
 
-    if res.status_code >= 400 or res.data is None:
-        raise HTTPException(500, str(res.data))
-
-    return {"inserted": True, "id": res.data[0]["id"]}
+    row_id = _extract_id(res)
+    if row_id is None:
+        raise HTTPException(500, "Insert failed (no id returned)")
+    return {"inserted": True, "id": row_id}
