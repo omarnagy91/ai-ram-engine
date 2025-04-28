@@ -1,0 +1,57 @@
+import os, openai
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from .db import sb
+from .schemas import SavePayload
+
+load_dotenv(".env.local", override=True)
+openai.api_key = os.environ["OPENAI_API_KEY"]
+
+app = FastAPI(title="RAM Engine")
+
+# ─────────── CORS
+origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in origins if o],
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+# ─────────── Routes
+@app.get("/health")
+async def health():
+    return {"ok": True}
+
+@app.post("/save")
+async def save(payload: SavePayload):
+    """Insert already-computed embedding row."""
+    res = sb.table("messages").insert(payload.dict()).execute()
+    if not (200 <= res.status_code < 300):
+        raise HTTPException(500, str(res.data))
+    return {"inserted": True, "id": res.data[0]["id"]}
+
+# (Optional) Endpoint to create embedding server-side
+@app.post("/embed-save")
+async def embed_and_save(body: dict):
+    text = body["text"]
+    part = body["part"]
+    chapter = body["chapter"]
+
+    emb_resp = openai.embeddings.create(
+        model=os.environ["OPENAI_MODEL_EMBED"],
+        input=text,
+    )
+    vector = emb_resp.data[0].embedding
+
+    res = sb.table("messages").insert({
+        "text": text,
+        "part": part,
+        "chapter": chapter,
+        "embedding": vector
+    }).execute()
+    if not (200 <= res.status_code < 300):
+        raise HTTPException(500, str(res.data))
+
+    return {"inserted": True, "id": res.data[0]["id"]}
