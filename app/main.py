@@ -19,10 +19,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ─────────── Routes
 @app.get("/health")
 async def health():
     return {"ok": True}
+
 
 @app.get("/debug/env")
 async def debug_env():
@@ -33,6 +35,7 @@ async def debug_env():
         service_key = "MISSING"
     return {"service_key": service_key}
 
+
 @app.post("/save")
 async def save(payload: SavePayload):
     """Insert already-computed embedding row."""
@@ -40,6 +43,7 @@ async def save(payload: SavePayload):
     if not (200 <= res.status_code < 300):
         raise HTTPException(500, str(res.data))
     return {"inserted": True, "id": res.data[0]["id"]}
+
 
 # (Optional) Endpoint to create embedding server-side
 @app.post("/embed-save")
@@ -53,12 +57,24 @@ async def embed_and_save(body: dict):
         model=os.environ["OPENAI_MODEL_EMBED"],
         input=text,
     )
-    vector = emb_resp.data[0].embedding            # list[float]
+    vector = emb_resp.data[0].embedding  # list[float]
     # 2️⃣  convert list → pgvector string
     vect_str = "[" + ",".join(f"{x:.6f}" for x in vector) + "]"
-    # 3️⃣  insert
-    res = sb.table("messages").insert({
-        "text": text,"part": part,"chapter": chapter,"embedding": vect_str                      # ← string now
-    }).execute()
-    if not (200 <= res.status_code < 300):
-        raise HTTPException(500, str(res.data))
+    # 3️⃣  insert row
+    res = (
+        sb.table("messages")
+        .insert(
+            {
+                "text": text,
+                "part": part,
+                "chapter": chapter,
+                "embedding": vect_str,
+            }
+        )
+        .execute()
+    )
+
+    if res.error or res.data is None:
+        raise HTTPException(500, str(res.error or "insert failed"))
+
+    return {"inserted": True, "id": res.data[0]["id"]}
